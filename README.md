@@ -79,7 +79,3 @@ La cámara del celular necesita HTTPS, por eso para usarlo en un evento real hay
 - Comparar las claves de acceso en tiempo constante (`crypto.timingSafeEqual`).
 - Limitar intentos por IP en `/api/verify` para frenar ataques de fuerza bruta.
 - Migrar a PostgreSQL si el evento requiere muchas puertas o miles de invitados; la lógica de seguridad no cambia.
-
----
-
-Hecho por [Elizabeth Cabrejos](https://github.com/Elizabeth1903)
