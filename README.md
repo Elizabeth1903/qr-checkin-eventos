@@ -1,74 +1,85 @@
-# Check-in de la fiesta — versión segura (backend + base de datos)
+# Check-in de eventos con QR
 
-Verificación de entradas con QR "de la buena": los códigos van **firmados**,
-la validación pasa **en el servidor** y los ingresos se marcan de forma
-**atómica** en una base de datos. Sirve para **varias puertas a la vez**.
+Sistema de control de acceso para eventos: cada invitado recibe un código QR firmado y el personal de puerta lo escanea desde el celular. La validación ocurre en el servidor, así que un QR falso o ya usado se rechaza al instante, incluso con varias puertas escaneando a la vez.
 
-## Qué incluye
+**Tecnologías:** Node.js · Express · SQLite (better-sqlite3) · JWT · HTML · JavaScript
 
-- `server.js` — el backend (Express + SQLite + JWT).
-- `public/admin.html` — panel para crear invitados, ver estados y generar/imprimir los QR.
-- `public/scan.html` — escáner para el personal de la puerta.
-- `package.json` — dependencias.
-- `.env.example` — plantilla de claves secretas.
+## Funcionalidades
 
-## Cómo está protegido
+- **Panel de administración** (`admin.html`): registrar invitados, ver quién ya ingresó, generar e imprimir los QR y deshacer un check-in hecho por error.
+- **Escáner de puerta** (`scan.html`): lee el QR con la cámara del celular y muestra el resultado con colores: verde (puede pasar), ámbar (ya ingresó) o rojo (no válido).
+- **Dos roles con claves separadas:** la administradora gestiona la lista; el personal de puerta solo puede verificar entradas.
 
-1. **QR firmados**: cada entrada lleva un token firmado con `QR_SECRET`.
-   Nadie puede inventar un QR válido sin esa clave secreta.
-2. **Validación en el servidor**: el celular de la puerta solo *pregunta*.
-   El servidor decide. Aunque hackeen la app del celular, no dejan entrar a nadie.
-3. **Check-in atómico**: la base de datos marca "usado" con
-   `UPDATE ... WHERE status='valid'`. Solo el primer escaneo gana,
-   así que el mismo QR no sirve dos veces, ni en dos puertas simultáneas.
-4. **Dos claves**: `ADMIN_KEY` (solo tú, para administrar) y
-   `DOOR_KEY` (para el personal de la puerta, solo escanea).
+## Cómo funciona la seguridad
 
-## Probarlo en tu compu (local)
+1. **QR firmados.** Cada QR contiene un token JWT firmado (HS256) con una clave secreta del servidor. Sin esa clave nadie puede fabricar un QR válido.
+2. **Identificadores aleatorios.** Cada entrada usa un ID generado con `crypto.randomBytes`, difícil de adivinar.
+3. **Validación en el servidor.** El celular de la puerta solo consulta; la decisión la toma el backend.
+4. **Check-in atómico.** La entrada se marca como usada con `UPDATE ... WHERE status = 'valid'`. Solo el primer escaneo modifica la fila, así que el mismo QR no sirve dos veces, ni siquiera en dos puertas al mismo tiempo.
 
-Necesitas tener Node.js instalado (versión 18 o mayor).
+```mermaid
+sequenceDiagram
+    participant P as Celular de puerta
+    participant S as Servidor
+    participant DB as SQLite
+    P->>S: POST /api/verify (token + clave de puerta)
+    S->>S: Verifica la firma del JWT
+    alt Firma inválida
+        S-->>P: invalid (QR falsificado)
+    else Firma válida
+        S->>DB: UPDATE tickets SET status='used' WHERE id=? AND status='valid'
+        alt Se actualizó 1 fila
+            S-->>P: ok (puede pasar)
+        else 0 filas
+            S-->>P: used (ya había ingresado)
+        end
+    end
+```
+
+## API
+
+| Método | Ruta | Rol | Acción |
+|---|---|---|---|
+| POST | `/api/admin/guests` | Admin | Registra invitados y devuelve sus tokens |
+| GET | `/api/admin/guests` | Admin | Lista invitados con su estado y totales |
+| POST | `/api/admin/undo` | Admin | Revierte un check-in |
+| POST | `/api/admin/reset` | Admin | Borra todos los registros |
+| POST | `/api/verify` | Puerta | Verifica un QR y registra el ingreso |
+
+La autenticación de cada rol se envía en las cabeceras `x-admin-key` o `x-door-key`.
+
+## Ejecutar en local
+
+Requiere Node.js 18 o superior.
 
 ```bash
 npm install
-QR_SECRET=miclave ADMIN_KEY=admin123 DOOR_KEY=door123 npm start
+QR_SECRET=una-clave-larga ADMIN_KEY=clave-admin DOOR_KEY=clave-puerta npm start
 ```
 
-Luego abre en tu navegador:
-- Panel de admin: http://localhost:3000/admin.html
-- Escáner: http://localhost:3000/scan.html
+Luego abrir:
 
-(En `localhost` la cámara sí funciona sin https.)
+- Panel de administración: http://localhost:3000/admin.html
+- Escáner de puerta: http://localhost:3000/scan.html
 
-## Subirlo a internet para usarlo en la fiesta
+En `localhost` la cámara funciona sin HTTPS. Las variables disponibles están documentadas en `.env.example`.
 
-La cámara de los celulares necesita un enlace **https**, así que hay que
-desplegar el servidor. La opción más fácil es **Render** (tiene plan gratis):
+## Despliegue
 
-1. Sube esta carpeta a un repositorio de GitHub.
-2. En https://render.com crea un **New > Web Service** y conéctalo al repo.
-3. Configura:
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm start`
-4. En **Environment**, agrega tus variables secretas (¡inventa valores propios!):
-   - `QR_SECRET` = una clave larga y aleatoria
-   - `ADMIN_KEY` = tu clave de admin
-   - `DOOR_KEY` = la clave para la puerta
-5. Para que los datos no se borren al reiniciar, agrega un **Disk**
-   (por ejemplo montado en `/data`) y pon `DB_PATH=/data/fiesta.db`.
+La cámara del celular necesita HTTPS, por eso para usarlo en un evento real hay que desplegar el servidor. Con Render (plan gratuito):
 
-Render te dará un link https tipo `https://tu-fiesta.onrender.com`.
-- Tú entras a `.../admin.html` con tu `ADMIN_KEY`.
-- El personal de puerta entra a `.../scan.html` con la `DOOR_KEY`.
+1. Crear un **Web Service** conectado a este repositorio.
+2. Build command: `npm install` · Start command: `npm start`
+3. Definir `QR_SECRET`, `ADMIN_KEY` y `DOOR_KEY` en **Environment** con valores propios.
+4. Agregar un disco persistente (por ejemplo en `/data`) y definir `DB_PATH=/data/eventos.db` para no perder los datos al reiniciar.
 
-## El día de la fiesta
+## Mejoras futuras
 
-1. En el panel de admin agrega a todos tus invitados.
-2. Genera e imprime (o envía por WhatsApp) sus QR.
-3. En la puerta, abre `scan.html`, pon la clave de puerta, inicia la cámara
-   y a escanear. Verde = pasa, ámbar = ya había entrado, rojo = no válido.
+- Hacer obligatorias las variables de entorno y detener el servidor si faltan, en lugar de usar claves por defecto.
+- Comparar las claves de acceso en tiempo constante (`crypto.timingSafeEqual`).
+- Limitar intentos por IP en `/api/verify` para frenar ataques de fuerza bruta.
+- Migrar a PostgreSQL si el evento requiere muchas puertas o miles de invitados; la lógica de seguridad no cambia.
 
-## Si crece mucho (cientos de personas / muchas puertas)
+---
 
-SQLite aguanta perfecto una fiesta. Si algún día necesitas algo más grande,
-solo se cambia la base de datos por PostgreSQL; la lógica de seguridad
-(tokens firmados + check-in atómico) es exactamente la misma.
+Hecho por [Elizabeth Cabrejos](https://github.com/Elizabeth1903)
